@@ -255,27 +255,56 @@ def go_match_beginning(buf, string):
     return False
 
 
-def go_match_fuzzy(name, string):
-    """Check if string matches name using approximation."""
-    if not string:
-        return False
+def go_match_fuzzy(s1, s2):
+    """Check if string matches name using approximation.
+    https://github.com/life4/textdistance/blob/e16511a91398f13bca0ba0447e384173d3766408/textdistance/algorithms/edit_based.py#L241
+    """
 
-    name_len = len(name)
-    string_len = len(string)
+    s1_len = len(s1)
+    s2_len = len(s2)
 
-    if string_len > name_len:
-        return False
-    if name_len == string_len:
-        return name == string
+    if not s1_len or not s2_len:
+        return 0.0
 
-    # Attempt to match all chars somewhere in name
-    prev_index = -1
-    for i, char in enumerate(string):
-        index = name.find(char, prev_index+1)
-        if index == -1:
-            return False
-        prev_index = index
-    return True
+    min_len = max(s1_len, s2_len)
+    search_range = (min_len // 2) - 1
+    if search_range < 0:
+        search_range = 0
+
+    s1_flags = [False] * s1_len
+    s2_flags = [False] * s2_len
+
+    # looking only within search range, count & flag matched pairs
+    common_chars = 0
+    for i, s1_ch in enumerate(s1):
+        low = max(0, i - search_range)
+        hi = min(i + search_range, s2_len - 1)
+        for j in range(low, hi + 1):
+            if not s2_flags[j] and s2[j] == s1_ch:
+                s1_flags[i] = s2_flags[j] = True
+                common_chars += 1
+                break
+
+    # short circuit if no characters match
+    if not common_chars:
+        return 0.0
+
+    # count transpositions
+    k = trans_count = 0
+    for i, s1_f in enumerate(s1_flags):
+        if s1_f:
+            for j in range(k, s2_len):
+                if s2_flags[j]:
+                    k = j + 1
+                    break
+            if s1[i] != s2[j]:
+                trans_count += 1
+    trans_count //= 2
+
+    # adjust for similarities in nonmatched characters
+    weight = common_chars / s1_len + common_chars / s2_len
+    weight += (common_chars - trans_count) / common_chars
+    return -weight
 
 
 def go_now(buf, args):
@@ -337,7 +366,7 @@ def go_matching_buffers(strinput):
         if not matching and strinput[-1] == ' ':
             matching = name.lower().endswith(strinput.strip())
         if not matching and go_option_enabled('fuzzy_search'):
-            matching = go_match_fuzzy(name.lower(), strinput)
+            matching = go_match_fuzzy(name.lower(), strinput.lower())
         if not matching and strinput.isdigit():
             matching = str(number).startswith(strinput)
         if len(strinput) == 0 or matching:
@@ -379,11 +408,15 @@ def go_matching_buffers(strinput):
         """Sort buffers by match at beginning."""
         return 0 if go_match_beginning(buf, strinput) else 1
 
+    def _sort_fuzzy(buf):
+        return go_match_fuzzy(buf['name'].lower(), strinput.lower())
+
     funcs = {
         'name': _sort_name,
         'hotlist': _sort_hotlist,
         'number': _sort_match_number,
         'beginning': _sort_match_beginning,
+        'fuzzy': _sort_fuzzy,
     }
 
     for key in weechat.config_get_plugin('sort').split(','):
@@ -417,28 +450,6 @@ def go_buffers_to_string(listbuf, pos, strinput):
                 weechat.color(weechat.config_get_plugin(
                     'color_name' + selected)),
                 buffer_name[index2:])
-        elif go_option_enabled("fuzzy_search") and \
-                go_match_fuzzy(buffer_name.lower(), strinput):
-            name = ""
-            prev_index = -1
-            for char in strinput.lower():
-                index = buffer_name.lower().find(char, prev_index+1)
-                if prev_index < 0:
-                    name += buffer_name[:index]
-                    name += weechat.color(weechat.config_get_plugin(
-                        'color_name_highlight' + selected))
-                if prev_index >= 0 and index > prev_index+1:
-                    name += weechat.color(weechat.config_get_plugin(
-                        'color_name' + selected))
-                    name += buffer_name[prev_index+1:index]
-                    name += weechat.color(weechat.config_get_plugin(
-                        'color_name_highlight' + selected))
-                name += buffer_name[index]
-                prev_index = index
-
-            name += weechat.color(weechat.config_get_plugin(
-                'color_name' + selected))
-            name += buffer_name[prev_index+1:]
         else:
             name = buffer_name
         string += ' '
